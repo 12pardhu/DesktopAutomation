@@ -19,7 +19,7 @@ class PlatformAutomation:
         return str(target)
 
     def open_application(self, name: str) -> str:
-        normalized = name.strip()
+        normalized = self._normalize_application_name(name)
         if self.system == "darwin":
             subprocess.Popen(["open", "-a", normalized])
         elif self.system == "windows":
@@ -83,3 +83,51 @@ class PlatformAutomation:
             os.startfile(str(target))  # type: ignore[attr-defined]
         else:
             subprocess.Popen(["xdg-open", str(target)])
+
+    def _normalize_application_name(self, name: str) -> str:
+        normalized = name.strip().lower()
+        aliases = {
+            "darwin": {
+                "chrome": "Google Chrome",
+                "google chrome": "Google Chrome",
+                "browser": "Safari",
+                "safari": "Safari",
+                "terminal": "Terminal",
+                "iterm": "iTerm",
+                "iterm2": "iTerm",
+                "finder": "Finder",
+                "vscode": "Visual Studio Code",
+                "vs code": "Visual Studio Code",
+                "visual studio code": "Visual Studio Code",
+                "calculator": "Calculator",
+                "notes": "Notes",
+                "music": "Music",
+                "preview": "Preview",
+                "word": "Microsoft Word",
+                "excel": "Microsoft Excel",
+                "powerpoint": "Microsoft PowerPoint",
+            },
+            "windows": {
+                "chrome": "chrome",
+                "edge": "msedge",
+                "notepad": "notepad",
+                "calculator": "calc",
+                "paint": "mspaint",
+                "word": "winword",
+                "excel": "excel",
+                "powerpoint": "powerpnt",
+                "terminal": "wt",
+                "cmd": "cmd",
+            },
+            "linux": {
+                "chrome": "google-chrome",
+                "browser": "xdg-open",
+                "firefox": "firefox",
+                "terminal": "gnome-terminal",
+                "calculator": "gnome-calculator",
+                "files": "nautilus",
+                "vscode": "code",
+                "vs code": "code",
+            },
+        }
+        return aliases.get(self.system, {}).get(normalized, name.strip())

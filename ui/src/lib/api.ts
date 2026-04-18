@@ -30,7 +30,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (token) {
     headers.set("x-session-token", token);
   }
-  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Network request failed";
+    throw new Error(
+      `${message}. The local backend may not be running at ${API_BASE}. Start the FastAPI server and try again.`,
+    );
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(detail || `Request failed with status ${response.status}`);
@@ -56,13 +64,22 @@ export async function sendChat(message: string, language = "auto", model?: strin
   });
 }
 
-export async function transcribeVoice(blob: Blob) {
+export async function transcribeVoice(blob: Blob, language = "auto") {
   const formData = new FormData();
   formData.append("file", blob, "voice-command.wav");
+  formData.append("language", language);
   return request<VoiceLog>("/api/voice/transcribe", {
     method: "POST",
     body: formData,
   });
+}
+
+export async function transcribeVoiceLocally(blob: Blob, language = "auto") {
+  if (!window.assistantDesktop?.transcribeLocalAudio) {
+    return null;
+  }
+  const buffer = await blob.arrayBuffer();
+  return window.assistantDesktop.transcribeLocalAudio(buffer, language);
 }
 
 export async function listModels(): Promise<string[]> {
@@ -88,6 +105,10 @@ export async function listHistory(): Promise<CommandHistoryItem[]> {
 
 export async function listActiveRuns(): Promise<RunRecord[]> {
   return request<RunRecord[]>("/api/runs/active");
+}
+
+export async function getRun(runId: string): Promise<RunRecord> {
+  return request<RunRecord>(`/api/runs/${runId}`);
 }
 
 export async function getAnalytics(): Promise<AnalyticsSummary> {

@@ -5,7 +5,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 
 from app.api.deps import (
     assistant_service,
@@ -140,7 +140,11 @@ async def update_settings(update: SettingsUpdate, x_session_token: str | None = 
 
 
 @router.post("/api/voice/transcribe", response_model=VoiceLog)
-async def transcribe_voice(file: UploadFile = File(...), x_session_token: str | None = Header(default=None)) -> VoiceLog:
+async def transcribe_voice(
+    file: UploadFile = File(...),
+    language: str = Form(default="auto"),
+    x_session_token: str | None = Header(default=None),
+) -> VoiceLog:
     require_auth(x_session_token)
     suffix = Path(file.filename or "voice.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -148,12 +152,15 @@ async def transcribe_voice(file: UploadFile = File(...), x_session_token: str | 
             shutil.copyfileobj(source, tmp)
         tmp.flush()
         tmp_path = Path(tmp.name)
-    transcript, language, confidence = stt_engine().transcribe(tmp_path)
+    try:
+        transcript, detected_language, confidence = stt_engine().transcribe(tmp_path, requested_language=language)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceLog(
         timestamp=datetime.now(timezone.utc),
-        engine=get_settings().stt_engine,
+        engine=stt_engine().engine,
         transcript=transcript,
-        detected_language=language,
+        detected_language=detected_language,
         confidence=confidence,
     )
 

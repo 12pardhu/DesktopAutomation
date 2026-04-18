@@ -34,10 +34,61 @@ class CommandPlanner:
 
     async def plan(self, command: str, requested_language: str, model: str | None = None) -> tuple[TaskPlan, str]:
         language = detect_language(command, requested_language)
+        deterministic_plan = self._deterministic_plan(command)
+        if deterministic_plan.tasks:
+            return deterministic_plan, language
         llm_plan = await self._plan_with_llm(command, language, model or self.default_model)
         if llm_plan and llm_plan.tasks:
             return llm_plan, language
         return self._fallback_plan(command), language
+
+    def _deterministic_plan(self, command: str) -> TaskPlan:
+        normalized = command.lower().strip()
+        browser_url_match = re.search(
+            r"open\s+(google|browser|chrome|edge|firefox|safari)(?:\s+and|\s+then)?\s+(?:type|enter|search)\s+(.+?)\s*(?:in\s+the\s+url|in\s+the\s+url\s+bar|in\s+the\s+search\s+bar|in\s+url|in\s+search|on\s+google)?$",
+            normalized,
+        )
+        browser_url_as_match = re.search(
+            r"open\s+(google|browser|chrome|edge|firefox|safari)(?:\s+and|\s+then)?\s+(?:type|enter|search)\s+in\s+the\s+url(?:\s+bar)?\s+as\s+(.+)$",
+            normalized,
+        )
+        if browser_url_as_match:
+            browser = browser_url_as_match.group(1).strip()
+            raw_target = browser_url_as_match.group(2).strip()
+            target = self._normalize_web_target(raw_target)
+            tasks: list[TaskDefinition] = []
+            if browser == "google":
+                tasks.append(TaskDefinition(action=TaskAction.open_url, url=target))
+            else:
+                tasks.append(TaskDefinition(action=TaskAction.open_app, app=browser))
+                tasks.append(TaskDefinition(action=TaskAction.wait, seconds=2))
+                tasks.append(TaskDefinition(action=TaskAction.open_url, url=target))
+            return TaskPlan(tasks=tasks)
+        if browser_url_match:
+            browser = browser_url_match.group(1).strip()
+            raw_target = re.sub(r"\s+(?:in\s+the\s+url|in\s+the\s+url\s+bar|in\s+the\s+search\s+bar|in\s+url|in\s+search|on\s+google)$", "", browser_url_match.group(2)).strip()
+            target = self._normalize_web_target(raw_target)
+            tasks: list[TaskDefinition] = []
+            if browser == "google":
+                tasks.append(TaskDefinition(action=TaskAction.open_url, url=target))
+            else:
+                tasks.append(TaskDefinition(action=TaskAction.open_app, app=browser))
+                tasks.append(TaskDefinition(action=TaskAction.wait, seconds=2))
+                tasks.append(TaskDefinition(action=TaskAction.open_url, url=target))
+            return TaskPlan(tasks=tasks)
+
+        simple_google_match = re.search(r"open\s+google(?:\s+and\s+open\s+(.+))?$", normalized)
+        if simple_google_match:
+            suffix = simple_google_match.group(1)
+            if suffix:
+                return TaskPlan(tasks=[TaskDefinition(action=TaskAction.open_url, url=self._normalize_web_target(suffix))])
+            return TaskPlan(tasks=[TaskDefinition(action=TaskAction.open_url, url="https://www.google.com")])
+
+        open_site_match = re.search(r"open\s+(amazon|amazon\.in|youtube|gmail|google maps|maps)$", normalized)
+        if open_site_match:
+            return TaskPlan(tasks=[TaskDefinition(action=TaskAction.open_url, url=self._normalize_web_target(open_site_match.group(1)))])
+
+        return TaskPlan(tasks=[])
 
     async def _plan_with_llm(self, command: str, language: str, model: str) -> TaskPlan | None:
         prompt = f"{PLANNER_PROMPT}\nLanguage: {language}\nCommand: {command}\nJSON:"
@@ -96,7 +147,48 @@ class CommandPlanner:
 
     def _segment_tasks(self, segment: str) -> list[TaskDefinition]:
         tasks: list[TaskDefinition] = []
-        if segment.startswith("open ") and any(word in segment for word in ("chrome", "firefox", "edge", "notepad", "calculator", "vlc")):
+        browser_type_match = re.search(
+            r"open\s+(.+?)\s+(?:and|then)\s+type(?:\s+in\s+the\s+(?:search|url)\s+bar(?:\s+as)?|\s+)(.+)",
+            segment,
+        )
+        if browser_type_match:
+            app = browser_type_match.group(1).strip()
+            text = browser_type_match.group(2).strip().strip('"')
+            tasks.append(TaskDefinition(action=TaskAction.open_app, app=app))
+            tasks.append(TaskDefinition(action=TaskAction.wait, seconds=2))
+            if text.lower():
+                tasks.append(TaskDefinition(action=TaskAction.open_url, url=self._normalize_web_target(text)))
+            else:
+                tasks.append(
+                    TaskDefinition(
+                        action=TaskAction.type_text,
+                        text=text,
+                        metadata={"target": "browser_url_bar", "submit": True},
+                    )
+                )
+            return tasks
+        if segment.startswith("open ") and any(
+            word in segment
+            for word in (
+                "chrome",
+                "firefox",
+                "edge",
+                "notepad",
+                "calculator",
+                "vlc",
+                "terminal",
+                "safari",
+                "finder",
+                "notes",
+                "music",
+                "preview",
+                "word",
+                "excel",
+                "powerpoint",
+                "vs code",
+                "vscode",
+            )
+        ):
             app = segment.replace("open ", "", 1).strip()
             tasks.append(TaskDefinition(action=TaskAction.open_app, app=app))
             if "youtube" in segment:
@@ -160,3 +252,22 @@ class CommandPlanner:
 
     def _looks_like_filename(self, text: str) -> bool:
         return bool(re.search(r"\.[A-Za-z0-9]{1,6}\b", text))
+
+    def _normalize_web_target(self, text: str) -> str:
+        cleaned = text.strip().strip('"').strip("'")
+        cleaned = re.sub(r"^(as|for)\s+", "", cleaned)
+        cleaned = cleaned.replace(" ", "")
+        known_sites = {
+            "google": "https://www.google.com",
+            "youtube": "https://www.youtube.com",
+            "amazon": "https://www.amazon.in",
+            "amazon.in": "https://www.amazon.in",
+            "gmail": "https://mail.google.com",
+            "maps": "https://maps.google.com",
+            "googlemaps": "https://maps.google.com",
+        }
+        if cleaned in known_sites:
+            return known_sites[cleaned]
+        if "." in cleaned and not cleaned.startswith(("http://", "https://")):
+            return f"https://{cleaned}"
+        return f"https://www.google.com/search?q={cleaned}"

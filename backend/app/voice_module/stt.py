@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import json
+import platform
 import subprocess
 import wave
 from pathlib import Path
@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from app.voice_module.command_normalizer import normalize_spoken_command
 from app.voice_module.noise import spectral_gate_placeholder
 
 try:
@@ -16,6 +17,14 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     KaldiRecognizer = None
     Model = None
+
+
+LANGUAGE_TO_LOCALES = {
+    "auto": ["en-US", "hi-IN", "te-IN"],
+    "en": ["en-US"],
+    "hi": ["hi-IN", "en-US"],
+    "te": ["te-IN", "en-US"],
+}
 
 
 class SpeechToText:
@@ -26,23 +35,42 @@ class SpeechToText:
         whisper_model: str | None = None,
         vosk_model: str | None = None,
     ) -> None:
-        self.engine = engine
         self.whisper_bin = whisper_bin
         self.whisper_model = whisper_model
         self.vosk_model = vosk_model
+        self.engine = self._resolve_engine(engine)
 
-    def transcribe(self, audio_path: Path) -> tuple[str, str, float | None]:
+    def transcribe(self, audio_path: Path, requested_language: str = "auto") -> tuple[str, str, float | None]:
         normalized_path = self._normalize_audio(audio_path)
         if self.engine == "whisper.cpp":
-            return self._transcribe_whisper_cpp(normalized_path)
+            transcript, detected_language, confidence = self._transcribe_whisper_cpp(normalized_path)
+            return normalize_spoken_command(transcript), detected_language, confidence
         if self.engine == "vosk":
-            return self._transcribe_vosk(normalized_path)
-        return ("Voice pipeline is in mock mode.", "en", None)
+            transcript, detected_language, confidence = self._transcribe_vosk(normalized_path)
+            return normalize_spoken_command(transcript), detected_language, confidence
+        if self.engine == "macos-speech":
+            transcript, detected_language, confidence = self._transcribe_macos_speech(normalized_path, requested_language)
+            return normalize_spoken_command(transcript), detected_language, confidence
+        return (
+            "Voice recognition is not configured on this machine. Configure Vosk or Whisper.cpp for fully offline voice commands.",
+            requested_language if requested_language != "auto" else "en",
+            None,
+        )
+
+    def _resolve_engine(self, engine: str) -> str:
+        normalized = engine.lower().strip()
+        if normalized not in {"", "mock", "auto"}:
+            return normalized
+        if self.vosk_model and Path(self.vosk_model).exists() and Model is not None:
+            return "vosk"
+        if self.whisper_bin and self.whisper_model and Path(self.whisper_model).exists():
+            return "whisper.cpp"
+        if platform.system().lower() == "darwin":
+            return "macos-speech"
+        return "mock"
 
     def _normalize_audio(self, audio_path: Path) -> Path:
         samples, sample_rate = sf.read(str(audio_path), always_2d=False)
-        if isinstance(samples, tuple):
-            samples = samples[0]
         samples_array = np.asarray(samples, dtype=np.float32)
         if samples_array.ndim > 1:
             samples_array = samples_array.mean(axis=1)
@@ -83,3 +111,24 @@ class SpeechToText:
             scores = [item.get("conf", 0.0) for item in result["result"]]
             confidence = sum(scores) / len(scores)
         return (transcript, "auto", confidence)
+
+    def _transcribe_macos_speech(self, audio_path: Path, requested_language: str) -> tuple[str, str, float | None]:
+        script_path = Path(__file__).with_name("macos_stt.swift")
+        locales = ",".join(LANGUAGE_TO_LOCALES.get(requested_language, LANGUAGE_TO_LOCALES["auto"]))
+        result = subprocess.run(
+            ["xcrun", "swift", str(script_path), str(audio_path), locales],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        stdout = result.stdout.strip() or "{}"
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(result.stderr.strip() or f"Unable to decode macOS speech output: {exc}") from exc
+        if result.returncode != 0:
+            raise RuntimeError(payload.get("error") or result.stderr.strip() or "macOS speech transcription failed.")
+        transcript = (payload.get("transcript") or "").strip()
+        if not transcript:
+            raise RuntimeError(payload.get("error") or "No speech detected from the recorded audio.")
+        return transcript, payload.get("detected_language", requested_language), None

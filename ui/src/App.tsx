@@ -19,6 +19,7 @@ import { StatusCard } from "./components/StatusCard";
 import {
   clearMemory,
   clearSession,
+  getRun,
   getAnalytics,
   getSettings,
   listActiveRuns,
@@ -79,6 +80,8 @@ export function App() {
   const [authError, setAuthError] = useState<string>("");
   const [password, setPassword] = useState("");
   const [lastReply, setLastReply] = useState("Offline automation assistant is ready.");
+  const [latestTranscript, setLatestTranscript] = useState("");
+  const [voiceStatus, setVoiceStatus] = useState("");
 
   useEffect(() => {
     void bootstrap();
@@ -133,13 +136,31 @@ export function App() {
     setBusy(true);
     try {
       const response = await sendChat(text, settings.language, settings.model, settings.speak_replies);
-      const assistantContent = `${response.reply}\n\n${JSON.stringify(response.plan, null, 2)}`;
       setMessages((current) => [
         ...current,
-        { role: "assistant", content: assistantContent, timestamp: new Date().toISOString() },
+        {
+          role: "assistant",
+          content: response.run_id
+            ? "Processing your command now. Please wait for the execution result."
+            : response.reply,
+          timestamp: new Date().toISOString(),
+        },
       ]);
       setLastReply(response.reply);
       await refreshOperationalData();
+      if (response.run_id) {
+        const finalRun = await waitForRunCompletion(response.run_id);
+        const finalMessage =
+          finalRun.status === "completed"
+            ? finalRun.last_message || "Command completed successfully."
+            : finalRun.last_message || "Command execution failed.";
+        setMessages((current) => [
+          ...current,
+          { role: "assistant", content: finalMessage, timestamp: new Date().toISOString() },
+        ]);
+        setLastReply(finalMessage);
+        await refreshOperationalData();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "The local assistant API is not reachable.";
       setMessages((current) => [...current, { role: "assistant", content: message, timestamp: new Date().toISOString() }]);
@@ -149,16 +170,46 @@ export function App() {
     }
   }
 
-  async function handleVoice(blob: Blob) {
+  async function handleVoice(blob: Blob, transcriptHint?: string) {
+    const hintedTranscript = transcriptHint?.trim();
+    if (hintedTranscript) {
+      setLatestTranscript(hintedTranscript);
+      setVoiceStatus("Voice command captured.");
+      await handleSend(hintedTranscript);
+      return;
+    }
+
     try {
-      const log = await transcribeVoice(blob);
+      const log = await transcribeVoice(blob, settings.language);
+      const transcript = log.transcript?.trim() || "";
+      setLatestTranscript(transcript || "No speech detected.");
+      setVoiceStatus(transcript ? "Voice command captured." : "No speech detected.");
       setVoiceLogs((current) => [log, ...current].slice(0, 10));
-      if (log.transcript) {
-        await handleSend(log.transcript);
+      if (transcript) {
+        await handleSend(transcript);
       }
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Voice transcription failed.");
+      const rawMessage = error instanceof Error ? error.message : "Voice transcription failed.";
+      const safeMessage = sanitizeVoiceError(rawMessage);
+      setAuthError(safeMessage);
+      setVoiceStatus(safeMessage);
     }
+  }
+
+  function sanitizeVoiceError(message: string) {
+    const lowered = message.toLowerCase();
+    if (
+      lowered.includes("tcc_crashing_due_to_privacy_violation") ||
+      lowered.includes("speech recognition permission was not granted") ||
+      lowered.includes("stack dump without symbol names") ||
+      lowered.includes("privacy violation")
+    ) {
+      return "Voice transcription is blocked by macOS Speech Recognition permission. Allow microphone and speech access, then try again.";
+    }
+    if (lowered.includes("failed to fetch") || lowered.includes("backend may not be running")) {
+      return "Voice transcription could not reach the local backend. Start the FastAPI server and try again.";
+    }
+    return message;
   }
 
   async function handleSaveSettings() {
@@ -184,6 +235,18 @@ export function App() {
   async function handleClearMemory() {
     await clearMemory();
     await refreshOperationalData();
+  }
+
+  async function waitForRunCompletion(runId: string) {
+    const maxAttempts = 60;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const run = await getRun(runId);
+      if (run.status === "completed" || run.status === "failed") {
+        return run;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    return getRun(runId);
   }
 
   return (
@@ -234,16 +297,23 @@ export function App() {
           ))}
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
+        <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,1fr)]">
           <ChatPanel
             messages={messages}
             isBusy={isBusy}
             speakReplies={settings.speak_replies}
+            latestTranscript={latestTranscript}
+            voiceStatus={voiceStatus}
+            onVoiceStatusChange={setVoiceStatus}
+            onVoicePreview={(transcript) => {
+              setLatestTranscript(transcript);
+              setVoiceStatus("Listening...");
+            }}
             onSend={handleSend}
             onVoice={handleVoice}
             onSpeakLast={handleSpeakLast}
           />
-          <div className="grid gap-5">
+          <div className="grid min-w-0 gap-5">
             <SettingsPanel models={models} settings={settings} onChange={setSettings} onSave={handleSaveSettings} />
             <MemoryPanel memory={memory} onClear={handleClearMemory} />
           </div>

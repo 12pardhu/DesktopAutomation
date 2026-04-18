@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field("http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field("llama3", alias="OLLAMA_MODEL")
 
-    stt_engine: str = Field("mock", alias="STT_ENGINE")
+    stt_engine: str = Field("auto", alias="STT_ENGINE")
     whisper_cpp_bin: str | None = Field(None, alias="WHISPER_CPP_BIN")
     whisper_model_path: str | None = Field(None, alias="WHISPER_MODEL_PATH")
     vosk_model_path: str | None = Field(None, alias="VOSK_MODEL_PATH")

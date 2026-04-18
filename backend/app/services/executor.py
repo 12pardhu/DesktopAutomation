@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import platform as platform_module
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ class TaskExecutor:
     def __init__(self, platform: PlatformAutomation) -> None:
         self.platform = platform
         self.current_directory = Path.home()
+        self.system = platform_module.system().lower()
 
     def reset_context(self) -> None:
         self.current_directory = Path.home()
@@ -43,10 +46,18 @@ class TaskExecutor:
             return f"Opened file {opened}", {"path": opened}
         if action == TaskAction.type_text:
             text = task.text or ""
-            if pyautogui is None:
-                raise RuntimeError("pyautogui is not installed for keyboard automation.")
-            pyautogui.write(text, interval=0.02)
-            return f"Typed text: {text}", {"text": text}
+            if pyautogui is not None:
+                if task.metadata.get("target") == "browser_url_bar" and self.system == "darwin":
+                    pyautogui.hotkey("command", "l")
+                    await asyncio.sleep(0.2)
+                pyautogui.write(text, interval=0.02)
+                if task.metadata.get("submit"):
+                    pyautogui.press("enter")
+                return f"Typed text: {text}", {"text": text}
+            if self.system == "darwin":
+                self._type_text_macos(text, task.metadata)
+                return f"Typed text: {text}", {"text": text}
+            raise RuntimeError("Keyboard automation is not available. Install pyautogui or use macOS fallback.")
         if action == TaskAction.click:
             if pyautogui is None:
                 raise RuntimeError("pyautogui is not installed for mouse automation.")
@@ -65,3 +76,19 @@ class TaskExecutor:
             opened = self.platform.open_url(task.url)
             return f"Opened URL {opened}", {"url": opened}
         raise RuntimeError(f"Unsupported action: {action.value}")
+
+    def _type_text_macos(self, text: str, metadata: dict[str, Any]) -> None:
+        escaped_text = text.replace("\\", "\\\\").replace('"', '\\"')
+        commands: list[str] = []
+        if metadata.get("target") == "browser_url_bar":
+            commands.append('key code 37 using command down')
+            commands.append("delay 0.2")
+        commands.append(f'keystroke "{escaped_text}"')
+        if metadata.get("submit"):
+            commands.append("key code 36")
+        script = [
+            'tell application "System Events"',
+            *[f"  {command}" for command in commands],
+            "end tell",
+        ]
+        subprocess.run(["osascript", "-e", "\n".join(script)], check=True)
