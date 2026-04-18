@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(124, 210, 200, 0.18), transparent 28rem),
+    radial-gradient(circle at top right, rgba(246, 189, 96, 0.16), transparent 24rem),
+    linear-gradient(135deg, #091016 0%, #101820 38%, #15232d 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(125, 211, 199, 0.15), transparent 0 24rem),
+    radial-gradient(circle at 80% 0%, rgba(242, 132, 130, 0.16), transparent 0 20rem),
+    linear-gradient(160deg, #0a1218 0%, #101820 45%, #182733 100%);
+  color: #edf6f9;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at center, black 35%, transparent 90%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}

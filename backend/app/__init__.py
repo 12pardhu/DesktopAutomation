@@ -1,0 +1,1 @@
+"""Offline desktop assistant backend."""
